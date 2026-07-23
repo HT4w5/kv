@@ -82,6 +82,8 @@ func (s *shard) set(k, v []byte, h uint64) {
 		}
 		s.idxMap = newMap
 		s.wraps.Add(1)
+	} else {
+		s.idx = (s.idx & (1 << 31)) | uint32(ptr)
 	}
 }
 
@@ -162,7 +164,7 @@ func ringWriteUint16(ptr uint16, b []byte, v uint16) (newPtr uint16) {
 func ringEqual(ptr uint16, b []byte, v []byte) (newPtr uint16, ok bool) {
 	rem := shardSize - int(ptr)
 
-	if rem >= len(v) {
+	if rem > len(v) {
 		// No fragmentation
 		return ptr + uint16(len(v)), bytes.Equal(b[ptr:ptr+uint16(len(v))], v)
 	}
@@ -182,7 +184,7 @@ func ringHash(ptr uint16, b []byte, n int) (newPtr uint16, hash uint64) {
 	hasher := xxh3.New()
 	rem := shardSize - int(ptr)
 
-	if rem >= n {
+	if rem > n {
 		// No fragmentation
 		hasher.Write(b[ptr : ptr+uint16(n)])
 		return ptr + uint16(n), hasher.Sum64()
@@ -199,7 +201,7 @@ func ringHash(ptr uint16, b []byte, n int) (newPtr uint16, hash uint64) {
 func ringReadTo(ptr uint16, b []byte, n int, dst []byte) (newPtr uint16, res []byte) {
 	rem := shardSize - int(ptr)
 
-	if rem >= n {
+	if rem > n {
 		// No fragmentation
 		return ptr + uint16(n), append(dst, b[ptr:ptr+uint16(n)]...)
 	}
@@ -213,7 +215,7 @@ func ringReadTo(ptr uint16, b []byte, n int, dst []byte) (newPtr uint16, res []b
 func ringWriteTo(ptr uint16, b []byte, v []byte) (newPtr uint16) {
 	rem := shardSize - int(ptr)
 
-	if rem >= len(v) {
+	if rem > len(v) {
 		// No fragmentation
 		newPtr = ptr + uint16(copy(b[ptr:], v))
 		return
@@ -228,6 +230,11 @@ func ringWriteTo(ptr uint16, b []byte, v []byte) (newPtr uint16) {
 
 func (s *shard) del(h uint64) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.b == nil {
+		return
+	}
 	delete(s.idxMap, h)
 	if len(s.idxMap) == 0 {
 		s.deallocations.Add(1)
@@ -236,17 +243,18 @@ func (s *shard) del(h uint64) {
 		s.b = nil
 		s.idxMap = nil
 	}
-	s.mu.Unlock()
 }
 
 func (s *shard) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	putShardBuffer(s.b)
-	putShardMap(s.idxMap)
-	s.b = nil
-	s.idxMap = nil
+	if s.b != nil {
+		putShardBuffer(s.b)
+		putShardMap(s.idxMap)
+		s.b = nil
+		s.idxMap = nil
+	}
 
 	s.gets.Store(0)
 	s.sets.Store(0)
