@@ -2,7 +2,12 @@ module github.com/HT4w5/kv
 
 go 1.26.2
 
-require github.com/zeebo/xxh3 v1.1.0
+require (
+	github.com/docker/go-units v0.5.0
+	github.com/spf13/pflag v1.0.10
+	github.com/zeebo/xxh3 v1.1.0
+	golang.org/x/time v0.15.0
+)
 
 require (
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
