@@ -24,28 +24,26 @@ import (
 
 // Config holds all benchmark parameters, parsed from CLI flags.
 type Config struct {
-	Duration         time.Duration
-	Concurrency      int
-	CacheSize        string
-	KeySpaceSize     int
-	ValueSize        int
-	ReadPercentage   int
-	DeletePercentage int
-	SampleInterval   time.Duration
-	Output           string
-	CPUProfile       string
-	MemProfile       string
-	HotKeySkew       float64
-	LoadPattern      string
-	MixAReadPct      int
-	MixADeletePct    int
-	MixARate         int
-	MixBReadPct      int
-	MixBDeletePct    int
-	MixBRate         int
-	SinePeriod       time.Duration
-	BurstDuration    time.Duration
-	SilentDuration   time.Duration
+	Duration       time.Duration
+	Concurrency    int
+	CacheSize      string
+	KeySpaceSize   int
+	ValueSize      int
+	SampleInterval time.Duration
+	Output         string
+	CPUProfile     string
+	MemProfile     string
+	HotKeySkew     float64
+	LoadPattern    string
+	MixAReadPct    int
+	MixADeletePct  int
+	MixARate       int
+	MixBReadPct    int
+	MixBDeletePct  int
+	MixBRate       int
+	SinePeriod     time.Duration
+	BurstDuration  time.Duration
+	SilentDuration time.Duration
 }
 
 func parseFlags() Config {
@@ -396,7 +394,7 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 		"HeapAlloc_MB", "Sys_MB", "NumGC", "PauseTotal_MS",
 		"Cache_Gets", "Cache_Sets", "Cache_Misses",
 		"Cache_Wraps", "Cache_Collisions", "Cache_Dels", "Cache_Deallocs",
-		"Cache_Allocated_MB",
+		"Cache_Allocs", "Cache_Allocated_MB",
 	}
 	if err := writer.Write(header); err != nil {
 		panic(err)
@@ -498,16 +496,16 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 				wrapsDelta := curStats.Wraps - prevStats.Wraps
 				collisionsDelta := curStats.Collisions - prevStats.Collisions
 				deallocsDelta := curStats.Deallocations - prevStats.Deallocations
+				allocsDelta := curStats.Allocations - prevStats.Allocations
 				allocatedMB := float64(curStats.Allocated) / (1 << 20)
 				prevStats = curStats
 
 				// Console readout.
 				fmt.Printf("[%4ds] Ops/s: %8.0f | Heap: %6.1f MB | Sys: %6.1f MB | GC: %4d | Pause: %6.2f ms | "+
-					"Gets: %8d | Sets: %8d | Miss: %8d | Wrap: %8d | Coll: %8d | Dels: %8d | Dealloc: %6d | Alloc: %6.1f MB\n",
+					"Gets: %8d | Sets: %8d | Miss: %8d | Wrap: %8d | Coll: %8d | Dels: %8d | Dealloc: %6d | Alloc: %6d | AllocMB: %5.1f\n",
 					elapsed, opsPerSec, heapAllocMB, sysMB, m.NumGC, pauseMS,
 					getsDelta, setsDelta, missesDelta, wrapsDelta, collisionsDelta,
-					delsDelta, deallocsDelta, allocatedMB)
-
+					delsDelta, deallocsDelta, allocsDelta, allocatedMB)
 				// Write CSV row.
 				row := []string{
 					strconv.Itoa(elapsed),
@@ -522,8 +520,7 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 					strconv.FormatUint(wrapsDelta, 10),
 					strconv.FormatUint(collisionsDelta, 10),
 					strconv.FormatUint(delsDelta, 10),
-					strconv.FormatUint(deallocsDelta, 10),
-					fmt.Sprintf("%.2f", allocatedMB),
+					strconv.FormatUint(deallocsDelta, 10), strconv.FormatUint(allocsDelta, 10), fmt.Sprintf("%.2f", allocatedMB),
 				}
 				if err := writer.Write(row); err != nil {
 					panic(err)

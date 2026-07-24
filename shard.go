@@ -3,6 +3,7 @@ package kv
 import (
 	"bytes"
 	"encoding/binary"
+	"maps"
 	"sync"
 	"sync/atomic"
 
@@ -10,7 +11,8 @@ import (
 )
 
 const (
-	shardSize = 1 << 16 // 64KB
+	shardSize       = 1 << 16 // 64KB
+	mapResizeFactor = 2
 )
 
 type shard struct {
@@ -68,19 +70,26 @@ func (s *shard) set(k, v []byte, h uint64) {
 	if ptr < oldPtr {
 		// Wrap
 		s.idx = ((s.idx ^ (1 << 31)) & (1 << 31)) | (uint32(ptr) &^ (1 << 31))
+		oldCap := len(s.idxMap)
 		newCap := 0
 		for _, idx := range s.idxMap {
 			if isOneIterationBefore(idx, s.idx) {
 				newCap++
 			}
 		}
-		newMap := make(map[uint64]uint32, newCap)
-		for k, idx := range s.idxMap {
-			if isOneIterationBefore(idx, s.idx) {
-				newMap[k] = idx
+		if oldCap >= newCap*mapResizeFactor {
+			newMap := make(map[uint64]uint32, newCap)
+			for k, idx := range s.idxMap {
+				if isOneIterationBefore(idx, s.idx) {
+					newMap[k] = idx
+				}
 			}
+			s.idxMap = newMap
+		} else {
+			maps.DeleteFunc(s.idxMap, func(k uint64, idx uint32) bool {
+				return !isOneIterationBefore(idx, s.idx)
+			})
 		}
-		s.idxMap = newMap
 		s.wraps.Add(1)
 	} else {
 		s.idx = (s.idx & (1 << 31)) | uint32(ptr)
