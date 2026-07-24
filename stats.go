@@ -1,7 +1,10 @@
 package kv
 
+// Stats represents global stats of Cache.
 type Stats struct {
-	Gets          uint64
+	// Number of Get() calls (including Has() but not Iterator.GetNext()).
+	Gets uint64
+	// Number of Set() calls.
 	Sets          uint64
 	Misses        uint64
 	Wraps         uint64
@@ -24,6 +27,7 @@ func (s *shard) loadStats(stats *Stats) {
 	}
 }
 
+// Stats() acquires global stats of Cache.
 func (c *Cache) Stats() Stats {
 	var stats Stats
 	for i := range len(c.shards) {

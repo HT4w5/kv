@@ -2,19 +2,27 @@ package kv
 
 import "github.com/zeebo/xxh3"
 
+// Cache is a thread-safe, memory KV cache.
+//
+// Cache supports a hard memory cap and auto memory deallocation
+// under low pressue.
+//
+// Note that actual memory consumption might be higher than configured cap.
 type Cache struct {
 	shards []shard
 }
 
+// New() creates a new Cache instance.
+//
+// Number of shards = (size + 64K - 1) / 64K.
+//
+// High lock contention might occur if size is too small.
+// It's advised to use at least NumCPU number of shards.
+//
+// An acceptable size is 32MB (512 shards).
 func New(size int) *Cache {
-	if size <= 0 {
-		size = 1
-	}
-
-	numRings := (size + shardSize - 1) / shardSize
-
 	return &Cache{
-		shards: make([]shard, numRings),
+		shards: make([]shard, (max(size, 1)+shardSize-1)/shardSize),
 	}
 }
 
@@ -75,6 +83,7 @@ type Iterator struct {
 	shardIdx int
 }
 
+// Iterator() creates a new Iterator instance.
 func (c *Cache) Iterator() *Iterator {
 	return &Iterator{
 		c: c,
@@ -89,6 +98,11 @@ func (c *Cache) Iterator() *Iterator {
 // vDst[:len(value)] if next pair exists.
 // New slices will be allocated if is nil or not long enough.
 // Returns nil, nil, false when there are no more pairs.
+//
+// Pairs acuqired by one Iterator are not guaranteed to be consistent in time.
+// Iteration could pick up pairs inserted after creation of Iterator.
+//
+// GetNext() does not increment the Gets stat.
 func (it *Iterator) GetNext(kDst, vDst []byte) ([]byte, []byte, bool) {
 	for {
 		if k, v, ok := it.si.getNext(kDst, vDst); ok {
