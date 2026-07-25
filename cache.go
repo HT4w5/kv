@@ -51,7 +51,7 @@ func (c *Cache) Get(dst, k []byte) (res []byte) {
 // HasGet() is equal to Get() in performance.
 func (c *Cache) HasGet(dst, k []byte) (res []byte, found bool) {
 	h := xxh3.Hash(k)
-	res, _ = c.shards[h%uint64(len(c.shards))].get(dst, k, h, true)
+	res, found = c.shards[h%uint64(len(c.shards))].get(dst, k, h, true)
 	return
 }
 

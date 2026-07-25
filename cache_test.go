@@ -30,6 +30,46 @@ func TestCache_Has(t *testing.T) {
 	}
 }
 
+func TestCache_HasGet(t *testing.T) {
+	c := kv.New(1 << 20)
+
+	// Found: returns value and true.
+	v, found := c.HasGet(nil, []byte("key"))
+	if found || v != nil {
+		t.Fatal("HasGet returned true/non-nil for missing key")
+	}
+
+	c.Set([]byte("key"), []byte("val"))
+	v, found = c.HasGet(nil, []byte("key"))
+	if !found {
+		t.Fatal("HasGet returned false for existing key")
+	}
+	if string(v) != "val" {
+		t.Fatalf("expected 'val', got %q", v)
+	}
+
+	// Pre-allocated dst large enough.
+	buf := make([]byte, 10)
+	v, found = c.HasGet(buf, []byte("key"))
+	if !found || string(v) != "val" {
+		t.Fatalf("HasGet with pre-allocated dst: found=%v, val=%q", found, v)
+	}
+
+	// Pre-allocated dst too small -> should allocate.
+	small := make([]byte, 1)
+	v, found = c.HasGet(small, []byte("key"))
+	if !found || string(v) != "val" {
+		t.Fatalf("HasGet with small dst: found=%v, val=%q", found, v)
+	}
+
+	// Empty key, empty value.
+	c.Set([]byte{}, []byte{})
+	v, found = c.HasGet(nil, []byte{})
+	if !found || len(v) != 0 {
+		t.Fatalf("HasGet for empty/empty: found=%v, len=%d", found, len(v))
+	}
+}
+
 func TestCache_Overwrite(t *testing.T) {
 	c := kv.New(1 << 20)
 	c.Set([]byte("key"), []byte("v1"))
