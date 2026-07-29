@@ -17,7 +17,7 @@ const (
 
 type shard struct {
 	idxMap map[uint64]uint32
-	b      []byte
+	b      *[]byte
 	mu     sync.Mutex
 	idx    uint32
 
@@ -62,10 +62,10 @@ func (s *shard) set(k, v []byte, h uint64) {
 	oldPtr := uint16(s.idx)
 	ptr := oldPtr
 
-	ptr = ringWriteUint16(ptr, s.b, uint16(len(k)))
-	ptr = ringWriteUint16(ptr, s.b, uint16(len(v)))
-	ptr = ringWriteTo(ptr, s.b, k)
-	ptr = ringWriteTo(ptr, s.b, v)
+	ptr = ringWriteUint16(ptr, *s.b, uint16(len(k)))
+	ptr = ringWriteUint16(ptr, *s.b, uint16(len(v)))
+	ptr = ringWriteTo(ptr, *s.b, k)
+	ptr = ringWriteTo(ptr, *s.b, v)
 
 	if ptr < oldPtr {
 		// Wrap
@@ -117,15 +117,15 @@ func (s *shard) get(dst, k []byte, h uint64, copy bool) ([]byte, bool) {
 		var kLen, vLen uint16
 		var ok bool
 
-		ptr, kLen = ringReadUint16(ptr, s.b)
+		ptr, kLen = ringReadUint16(ptr, *s.b)
 		if kLen != uint16(len(k)) {
 			s.collisions.Add(1)
 			s.misses.Add(1)
 			delete(s.idxMap, h)
 			return nil, false
 		}
-		ptr, vLen = ringReadUint16(ptr, s.b)
-		ptr, ok = ringEqual(ptr, s.b, k)
+		ptr, vLen = ringReadUint16(ptr, *s.b)
+		ptr, ok = ringEqual(ptr, *s.b, k)
 		if !ok {
 			s.collisions.Add(1)
 			s.misses.Add(1)
@@ -135,7 +135,7 @@ func (s *shard) get(dst, k []byte, h uint64, copy bool) ([]byte, bool) {
 
 		if copy {
 			dst = dst[:0]
-			_, dst = ringReadTo(ptr, s.b, int(vLen), dst)
+			_, dst = ringReadTo(ptr, *s.b, int(vLen), dst)
 			return dst, true
 		} else {
 			return nil, true
@@ -325,17 +325,17 @@ func (it *shardIter) getNext(kDst, vDst []byte) (kRes []byte, vRes []byte, ok bo
 			ptr := uint16(idx)
 			var kLen, vLen uint16
 
-			ptr, kLen = ringReadUint16(ptr, it.s.b)
-			ptr, vLen = ringReadUint16(ptr, it.s.b)
+			ptr, kLen = ringReadUint16(ptr, *it.s.b)
+			ptr, vLen = ringReadUint16(ptr, *it.s.b)
 
-			if _, hash := ringHash(ptr, it.s.b, int(kLen)); hash != h {
+			if _, hash := ringHash(ptr, *it.s.b, int(kLen)); hash != h {
 				continue
 			}
 
 			kDst = kDst[:0]
-			ptr, kDst = ringReadTo(ptr, it.s.b, int(kLen), kDst)
+			ptr, kDst = ringReadTo(ptr, *it.s.b, int(kLen), kDst)
 			vDst = vDst[:0]
-			ptr, vDst = ringReadTo(ptr, it.s.b, int(vLen), vDst)
+			ptr, vDst = ringReadTo(ptr, *it.s.b, int(vLen), vDst)
 			return kDst, vDst, true
 		}
 	}

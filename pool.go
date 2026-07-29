@@ -2,17 +2,18 @@ package kv
 
 import "sync"
 
-var shardBufferPool = sync.Pool{}
-
-func getShardBuffer() []byte {
-	v := shardBufferPool.Get()
-	if v == nil {
-		return make([]byte, shardSize)
-	}
-	return v.([]byte)
+var shardBufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, shardSize)
+		return &b
+	},
 }
 
-func putShardBuffer(buf []byte) {
+func getShardBuffer() *[]byte {
+	return shardBufferPool.Get().(*[]byte)
+}
+
+func putShardBuffer(buf *[]byte) {
 	shardBufferPool.Put(buf)
 }
 
