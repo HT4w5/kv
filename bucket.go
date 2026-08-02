@@ -1,16 +1,11 @@
 package kv
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
-	"fmt"
 	"maps"
-	"os"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/zeebo/xxh3"
 )
@@ -385,132 +380,4 @@ func (it *bucketIter) getNext(kDst, vDst []byte) (kRes, vRes []byte, ok bool) {
 			return
 		}
 	}
-}
-
-type debugIdxMapEntry struct {
-	Hash    uint64
-	Idx     uint64
-	LocIdx  int
-	ChkIdx  int
-	Wrap    bool
-	KLen    int
-	VLen    int
-	Key     string
-	Corrupt bool
-	Remark  string
-}
-
-type debugChunkEntry struct {
-	Idx      int
-	Allocted bool
-	UseCount int
-}
-
-func (bkt *bucket) debugDump() {
-	// Verify every pair in idxMap to find stale entries.
-	f, err := os.Create("bucket-debug-dump-" + time.Now().String())
-	if err != nil {
-		fmt.Printf("debugDump: failed to open file: %v", err)
-		return
-	}
-	defer f.Close()
-	bw := bufio.NewWriter(f)
-	defer bw.Flush()
-
-	enc := json.NewEncoder(bw)
-	enc.SetIndent("", "")
-
-	fmt.Fprintf(bw, `{"idx": %d,"idxMap":[`, bkt.idx)
-
-	i := 0
-	for hash, idx := range bkt.idxMap {
-		if i > 0 {
-			bw.WriteByte(',')
-		}
-		i++
-
-		entry := debugIdxMapEntry{
-			Hash: hash,
-			Idx:  idx,
-		}
-
-		func() {
-			if !isValid(idx, bkt.idx) {
-				entry.Remark = "filtered"
-				return
-			}
-
-			locIdx := localIdx(idx)
-			chkIdx := chunkIdx(idx)
-			wrp := wrap(idx)
-
-			entry.LocIdx = locIdx
-			entry.ChkIdx = chkIdx
-			entry.Wrap = wrp == wrapMask
-
-			if chunkSize-locIdx < 4 {
-				entry.Corrupt = true
-				entry.Remark = fmt.Sprintf("locIdx too close to chunk border: %d", locIdx)
-				return
-			}
-
-			if chkIdx >= len(bkt.chunks) {
-				entry.Corrupt = true
-				entry.Remark = fmt.Sprintf("chkIdx out of bounds: %d", chkIdx)
-				return
-			}
-
-			chk := bkt.chunks[chkIdx]
-			if chk == nil {
-				entry.Corrupt = true
-				entry.Remark = fmt.Sprintf("chunk %d not allocated", chkIdx)
-			}
-
-			kLen := int(binary.LittleEndian.Uint16(chk.b[locIdx:]))
-			vLen := int(binary.LittleEndian.Uint16(chk.b[locIdx+2:]))
-
-			entry.KLen = kLen
-			entry.VLen = vLen
-
-			if chunkSize-locIdx < 4+kLen+vLen {
-				entry.Corrupt = true
-				entry.Remark = fmt.Sprintf("locIdx too close to chunk border: %d", locIdx)
-				return
-			}
-
-			entry.Key = string(chk.b[locIdx+4 : locIdx+4+kLen])
-
-			if hash != xxh3.Hash(chk.b[locIdx+4:locIdx+4+kLen]) {
-				entry.Corrupt = true
-				entry.Remark = "key hash mismatch"
-			}
-		}()
-
-		if err := enc.Encode(entry); err != nil {
-			fmt.Printf("debugDump: %v", err)
-		}
-	}
-
-	fmt.Fprint(bw, `],"chunks":[`)
-
-	for idx, chk := range bkt.chunks {
-		if idx > 0 {
-			bw.WriteByte(',')
-		}
-
-		entry := debugChunkEntry{
-			Idx:      idx,
-			Allocted: chk != nil,
-		}
-
-		if chk != nil {
-			entry.UseCount = int(chk.useCount)
-		}
-
-		if err := enc.Encode(entry); err != nil {
-			fmt.Printf("debugDump: %v", err)
-		}
-	}
-
-	fmt.Fprint(bw, `]}`)
 }
