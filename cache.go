@@ -2,28 +2,32 @@ package kv
 
 import "github.com/zeebo/xxh3"
 
+const (
+	numBuckets = 512
+)
+
 // Cache is a thread-safe, memory KV cache.
 //
 // Cache supports a hard memory cap and auto memory deallocation
-// under low pressue.
+// under low pressure.
 //
-// Note that actual memory consumption might be higher than configured cap.
+// Actual memory consumption might be slightly higher than configured size.
 type Cache struct {
-	shards []shard
+	buckets [512]bucket
 }
 
 // New() creates a new Cache instance.
 //
-// Number of shards = (size + 64K - 1) / 64K.
-//
-// High lock contention might occur if size is too small.
-// It's advised to use at least NumCPU number of shards.
-//
-// An acceptable size is 32MB (512 shards).
+// size
 func New(size int) *Cache {
-	return &Cache{
-		shards: make([]shard, (max(size, 1)+shardSize-1)/shardSize),
+	bucketSize := (max(size, 1) + numBuckets - 1) / numBuckets
+
+	c := &Cache{}
+	for i := range numBuckets {
+		c.buckets[i].init(bucketSize)
 	}
+
+	return c
 }
 
 // Set() sets k, v into the cache.
@@ -32,26 +36,24 @@ func New(size int) *Cache {
 // k and v are safe to be modified after Set() returns
 func (c *Cache) Set(k, v []byte) {
 	h := xxh3.Hash(k)
-	c.shards[h%uint64(len(c.shards))].set(k, v, h)
+	c.buckets[h%uint64(len(c.buckets))].set(k, v, h)
 }
 
-// Get() copies value for key k into dst[:len(value)].
-// A new slice will be allocated if dst is nil or not long enough.
+// Get() appends value for key k to dst.
 // Returns nil if not found.
 func (c *Cache) Get(dst, k []byte) (res []byte) {
 	h := xxh3.Hash(k)
-	res, _ = c.shards[h%uint64(len(c.shards))].get(dst, k, h, true)
+	res, _ = c.buckets[h%uint64(len(c.buckets))].get(dst, k, h, true)
 	return
 }
 
-// HasGet() copies value for key k into dst[:len(value)] if pair exists.
-// A new slice will be allocated if dst is nil or not long enough.
+// HasGet() appends value for key k to dst if pair exists.
 // Returns nil, false if not found.
 //
 // HasGet() is equal to Get() in performance.
 func (c *Cache) HasGet(dst, k []byte) (res []byte, found bool) {
 	h := xxh3.Hash(k)
-	res, found = c.shards[h%uint64(len(c.shards))].get(dst, k, h, true)
+	res, found = c.buckets[h%uint64(len(c.buckets))].get(dst, k, h, true)
 	return
 }
 
@@ -60,37 +62,37 @@ func (c *Cache) HasGet(dst, k []byte) (res []byte, found bool) {
 // Has() is slightly cheaper than HasGet() and Get().
 func (c *Cache) Has(k []byte) (found bool) {
 	h := xxh3.Hash(k)
-	_, found = c.shards[h%uint64(len(c.shards))].get(nil, k, h, false)
+	_, found = c.buckets[h%uint64(len(c.buckets))].get(nil, k, h, false)
 	return
 }
 
 // Del() deletes KV pair from cache with key k.
 func (c *Cache) Del(k []byte) {
 	h := xxh3.Hash(k)
-	c.shards[h%uint64(len(c.shards))].del(h)
+	c.buckets[h%uint64(len(c.buckets))].del(h)
 }
 
 // Reset removes all KV pairs from cache
 func (c *Cache) Reset() {
-	for i := range len(c.shards) {
-		c.shards[i].reset()
+	for i := range len(c.buckets) {
+		c.buckets[i].reset()
 	}
 }
 
 type Iterator struct {
-	c        *Cache
-	si       *shardIter
-	shardIdx int
+	c         *Cache
+	bi        *bucketIter
+	bucketIdx int
 }
 
 // Iterator() creates a new Iterator instance.
 func (c *Cache) Iterator() *Iterator {
 	return &Iterator{
 		c: c,
-		si: &shardIter{
-			s: &shard{},
+		bi: &bucketIter{
+			bkt: &bucket{},
 		},
-		shardIdx: -1,
+		bucketIdx: -1,
 	}
 }
 
@@ -99,21 +101,21 @@ func (c *Cache) Iterator() *Iterator {
 // New slices will be allocated if is nil or not long enough.
 // Returns nil, nil, false when there are no more pairs.
 //
-// Pairs acuqired by one Iterator are not guaranteed to be consistent in time.
+// Pairs acquired by one Iterator are not guaranteed to be consistent in time.
 // Iteration could pick up pairs inserted after creation of Iterator.
 //
 // GetNext() does not increment the Gets stat.
 func (it *Iterator) GetNext(kDst, vDst []byte) ([]byte, []byte, bool) {
 	for {
-		if k, v, ok := it.si.getNext(kDst, vDst); ok {
+		if k, v, ok := it.bi.getNext(kDst, vDst); ok {
 			return k, v, true
 		} else {
-			it.shardIdx++
-			if it.shardIdx >= len(it.c.shards) { // No more shards
+			it.bucketIdx++
+			if it.bucketIdx >= len(it.c.buckets) { // No more shards
 				return nil, nil, false
 			}
 
-			it.si = it.c.shards[it.shardIdx].iterator()
+			it.bi = it.c.buckets[it.bucketIdx].iterator()
 		}
 	}
 }

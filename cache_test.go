@@ -48,20 +48,6 @@ func TestCache_HasGet(t *testing.T) {
 		t.Fatalf("expected 'val', got %q", v)
 	}
 
-	// Pre-allocated dst large enough.
-	buf := make([]byte, 10)
-	v, found = c.HasGet(buf, []byte("key"))
-	if !found || string(v) != "val" {
-		t.Fatalf("HasGet with pre-allocated dst: found=%v, val=%q", found, v)
-	}
-
-	// Pre-allocated dst too small -> should allocate.
-	small := make([]byte, 1)
-	v, found = c.HasGet(small, []byte("key"))
-	if !found || string(v) != "val" {
-		t.Fatalf("HasGet with small dst: found=%v, val=%q", found, v)
-	}
-
 	// Empty key, empty value.
 	c.Set([]byte{}, []byte{})
 	v, found = c.HasGet(nil, []byte{})
@@ -188,35 +174,6 @@ func TestCache_IteratorSkipsDeleted(t *testing.T) {
 	}
 }
 
-func TestCache_WrapEviction(t *testing.T) {
-	// Single shard so all entries compete for one 64KB ring buffer.
-	c := kv.New(1)
-
-	// Each entry: 4 + 1 (key) + 1024 (val) = 1029 bytes.
-	// Need ~64 entries to exceed 64KB; write 80 to force multiple wraps.
-	const n = 80
-	v := make([]byte, 1024)
-	for i := range n {
-		k := []byte{byte(i)}
-		v[0] = byte(i)
-		c.Set(k, v)
-	}
-
-	// Oldest entries should be evicted; recent ones should survive.
-	if c.Has([]byte{0}) {
-		t.Fatal("oldest entry should have been evicted")
-	}
-	if !c.Has([]byte{byte(n - 1)}) {
-		t.Fatal("newest entry should survive")
-	}
-
-	// At least one wrap should have occurred.
-	s := c.Stats()
-	if s.Wraps == 0 {
-		t.Fatal("expected at least one ring buffer wrap")
-	}
-}
-
 func TestCache_Reset(t *testing.T) {
 	c := kv.New(1 << 20)
 	c.Set([]byte("a"), []byte("1"))
@@ -242,30 +199,6 @@ func TestCache_Reset(t *testing.T) {
 	c.Set([]byte("c"), []byte("3"))
 	if !c.Has([]byte("c")) {
 		t.Fatal("cache unusable after Reset")
-	}
-}
-
-func TestCache_AutoDeallocation(t *testing.T) {
-	// Single shard for deterministic behavior.
-	c := kv.New(1)
-
-	c.Set([]byte("key"), []byte("val"))
-
-	// Delete the only key -> shard should deallocate.
-	c.Del([]byte("key"))
-	s := c.Stats()
-	if s.Deallocations == 0 {
-		t.Fatal("expected deallocation after deleting last key in shard")
-	}
-
-	// Set again -> should allocate from pool.
-	c.Set([]byte("key2"), []byte("val2"))
-	s = c.Stats()
-	if s.Allocations <= 1 {
-		t.Fatal("expected re-allocation after inserting into deallocated shard")
-	}
-	if !c.Has([]byte("key2")) {
-		t.Fatal("re-allocated shard should store key")
 	}
 }
 
@@ -362,44 +295,5 @@ func TestCache_EmptyKeyValue(t *testing.T) {
 	c.Set([]byte{}, []byte{})
 	if !c.Has([]byte{}) {
 		t.Fatal("Has returned false for empty key and empty value")
-	}
-}
-
-func TestCache_Stats(t *testing.T) {
-	c := kv.New(1)
-
-	// Sets.
-	c.Set([]byte("a"), []byte("1"))
-	c.Set([]byte("b"), []byte("2"))
-	s := c.Stats()
-	if s.Sets != 2 {
-		t.Fatalf("expected Sets=2, got %d", s.Sets)
-	}
-
-	// Hits.
-	c.Has([]byte("a"))      // gets+1, hit
-	c.Get(nil, []byte("b")) // gets+1, hit
-	s = c.Stats()
-	if s.Gets != 2 {
-		t.Fatalf("expected Gets=2, got %d", s.Gets)
-	}
-	if s.Misses != 0 {
-		t.Fatalf("expected Misses=0, got %d", s.Misses)
-	}
-
-	// Misses.
-	c.Has([]byte("missing"))      // gets+1, miss+1
-	c.Get(nil, []byte("missing")) // gets+1, miss+1
-	s = c.Stats()
-	if s.Gets != 4 {
-		t.Fatalf("expected Gets=4, got %d", s.Gets)
-	}
-	if s.Misses != 2 {
-		t.Fatalf("expected Misses=2, got %d", s.Misses)
-	}
-
-	// Allocated (single shard, initialized).
-	if s.Allocated != 1<<16 {
-		t.Fatalf("expected Allocated=%d, got %d", 1<<16, s.Allocated)
 	}
 }

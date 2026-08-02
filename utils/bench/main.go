@@ -51,7 +51,7 @@ func parseFlags() Config {
 
 	flag.DurationVarP(&cfg.Duration, "duration", "d", 10*time.Minute, "test run duration")
 	flag.IntVarP(&cfg.Concurrency, "concurrency", "c", 16, "number of worker goroutines")
-	flag.StringVarP(&cfg.CacheSize, "cache-size", "s", "32MB", "total cache capacity (e.g. 64KB, 32MB, 1GB)")
+	flag.StringVarP(&cfg.CacheSize, "cache-size", "s", "32MiB", "total cache capacity (e.g. 64KB, 32MB, 1GB)")
 	flag.IntVarP(&cfg.KeySpaceSize, "key-space", "k", 500_000, "number of distinct keys in the pool")
 	flag.IntVarP(&cfg.ValueSize, "value-size", "v", 1024, "byte size of values")
 	flag.DurationVarP(&cfg.SampleInterval, "sample-interval", "i", 5*time.Second, "metrics recording interval")
@@ -75,16 +75,12 @@ func parseFlags() Config {
 }
 
 func (c Config) String() string {
-	shardCount := "?"
-	if n, err := units.RAMInBytes(c.CacheSize); err == nil {
-		shardCount = fmt.Sprintf("%d", (n+65535)>>16)
-	}
 	mixAWrite := 100 - c.MixAReadPct - c.MixADeletePct
 	mixBWrite := 100 - c.MixBReadPct - c.MixBDeletePct
 	return fmt.Sprintf(
 		"Duration:       %v\n"+
 			"Concurrency:    %d\n"+
-			"Cache Size:     %s (%s shards)\n"+
+			"Cache Size:     %s\n"+
 			"Key Space:      %d\n"+
 			"Value Size:     %d bytes\n"+
 			"Mix A:          %d%% read / %d%% delete / %d%% set @ %d ops/s\n"+
@@ -95,7 +91,7 @@ func (c Config) String() string {
 			"Output:         %s",
 		c.Duration,
 		c.Concurrency,
-		c.CacheSize, shardCount,
+		c.CacheSize,
 		c.KeySpaceSize,
 		c.ValueSize,
 		c.MixAReadPct, c.MixADeletePct, mixAWrite, c.MixARate,
@@ -391,10 +387,10 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 	writer := csv.NewWriter(file)
 	header := []string{
 		"Elapsed_Sec", "Ops_Per_Sec",
-		"HeapAlloc_MB", "Sys_MB", "NumGC", "PauseTotal_MS",
+		"Heap", "Sys", "NumGC", "PauseTotal_Ns",
 		"Cache_Gets", "Cache_Sets", "Cache_Misses",
-		"Cache_Wraps", "Cache_Collisions", "Cache_Dels", "Cache_Deallocs",
-		"Cache_Allocs", "Cache_Allocated_MB",
+		"Cache_Collisions", "Cache_Vacuums", "Cache_Dels", "Cache_Deallocs",
+		"Cache_Allocs", "Cache_Allocated",
 	}
 	if err := writer.Write(header); err != nil {
 		panic(err)
@@ -425,6 +421,7 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 		go func(workerID int) {
 			defer wg.Done()
 			r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID)))
+			buf := make([]byte, 0, cfg.ValueSize)
 
 			for {
 				select {
@@ -441,7 +438,7 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 					controller.Acquire(ctx)
 					switch controller.OpType(time.Since(startTime), r.Intn(100)) {
 					case OpRead:
-						cache.Has(key)
+						cache.Get(buf, key)
 					case OpDelete:
 						cache.Del(key)
 						atomic.AddUint64(&totalDels, 1)
@@ -484,43 +481,41 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 				runtime.ReadMemStats(&m)
 
 				elapsed := int(t.Sub(startTime).Seconds())
-				heapAllocMB := float64(m.HeapAlloc) / (1 << 20)
-				sysMB := float64(m.Sys) / (1 << 20)
-				pauseMS := float64(m.PauseTotalNs) / 1e6
 
 				// Cache-level stats (deltas since last sample).
 				curStats := cache.Stats()
 				getsDelta := curStats.Gets - prevStats.Gets
 				setsDelta := curStats.Sets - prevStats.Sets
 				missesDelta := curStats.Misses - prevStats.Misses
-				wrapsDelta := curStats.Wraps - prevStats.Wraps
 				collisionsDelta := curStats.Collisions - prevStats.Collisions
+				vacuumsDelta := curStats.Vacuums - prevStats.Vacuums
 				deallocsDelta := curStats.Deallocations - prevStats.Deallocations
 				allocsDelta := curStats.Allocations - prevStats.Allocations
-				allocatedMB := float64(curStats.Allocated) / (1 << 20)
 				prevStats = curStats
 
 				// Console readout.
-				fmt.Printf("[%4ds] Ops/s: %8.0f | Heap: %6.1f MB | Sys: %6.1f MB | GC: %4d | Pause: %6.2f ms | "+
-					"Gets: %8d | Sets: %8d | Miss: %8d | Wrap: %8d | Coll: %8d | Dels: %8d | Dealloc: %6d | Alloc: %6d | AllocMB: %5.1f\n",
-					elapsed, opsPerSec, heapAllocMB, sysMB, m.NumGC, pauseMS,
-					getsDelta, setsDelta, missesDelta, wrapsDelta, collisionsDelta,
-					delsDelta, deallocsDelta, allocsDelta, allocatedMB)
+				fmt.Printf("[%4ds] Ops/s: %8.0f | Heap: %s | Sys: %s | GC: %4d | Pause: %s | "+
+					"Gets: %8d | Sets: %8d | Miss: %8d | Coll: %8d | Vacuum: %8d | Dels: %8d | Dealloc: %6d | Alloc: %6d | Allocated: %s\n",
+					elapsed, opsPerSec, units.BytesSize(float64(m.HeapAlloc)), units.BytesSize(float64(m.Sys)), m.NumGC, time.Duration(m.PauseTotalNs).String(),
+					getsDelta, setsDelta, missesDelta, collisionsDelta, vacuumsDelta,
+					delsDelta, deallocsDelta, allocsDelta, units.BytesSize(float64(curStats.Allocated)))
 				// Write CSV row.
 				row := []string{
 					strconv.Itoa(elapsed),
 					fmt.Sprintf("%.0f", opsPerSec),
-					fmt.Sprintf("%.2f", heapAllocMB),
-					fmt.Sprintf("%.2f", sysMB),
+					fmt.Sprintf("%d", m.HeapAlloc),
+					fmt.Sprintf("%d", m.Sys),
 					strconv.FormatUint(uint64(m.NumGC), 10),
-					fmt.Sprintf("%.2f", pauseMS),
-					strconv.FormatUint(getsDelta, 10),
-					strconv.FormatUint(setsDelta, 10),
-					strconv.FormatUint(missesDelta, 10),
-					strconv.FormatUint(wrapsDelta, 10),
-					strconv.FormatUint(collisionsDelta, 10),
+					fmt.Sprintf("%d", m.PauseTotalNs),
+					strconv.FormatInt(getsDelta, 10),
+					strconv.FormatInt(setsDelta, 10),
+					strconv.FormatInt(missesDelta, 10),
+					strconv.FormatInt(collisionsDelta, 10),
+					strconv.FormatInt(vacuumsDelta, 10),
 					strconv.FormatUint(delsDelta, 10),
-					strconv.FormatUint(deallocsDelta, 10), strconv.FormatUint(allocsDelta, 10), fmt.Sprintf("%.2f", allocatedMB),
+					strconv.FormatInt(deallocsDelta, 10),
+					strconv.FormatInt(allocsDelta, 10),
+					fmt.Sprintf("%d", curStats.Allocated),
 				}
 				if err := writer.Write(row); err != nil {
 					panic(err)
@@ -551,10 +546,10 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 	fmt.Printf("Cache Sets:     %d\n", finalStats.Sets)
 	fmt.Printf("Cache Dels:     %d\n", finalDels)
 	fmt.Printf("Cache Misses:   %d\n", finalStats.Misses)
-	fmt.Printf("Cache Wraps:    %d\n", finalStats.Wraps)
 	fmt.Printf("Collisions:     %d\n", finalStats.Collisions)
+	fmt.Printf("Vacuums:        %d\n", finalStats.Vacuums)
 	fmt.Printf("Allocations:    %d\n", finalStats.Allocations)
 	fmt.Printf("Deallocations:  %d\n", finalStats.Deallocations)
-	fmt.Printf("Allocated MB:   %.2f\n", float64(finalStats.Allocated)/(1<<20))
+	fmt.Printf("Allocated:      %s\n", units.BytesSize(float64(finalStats.Allocated)))
 	fmt.Printf("CSV saved to:   %s\n", cfg.Output)
 }
