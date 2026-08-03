@@ -31,11 +31,9 @@ func (bkt *bucket) loadStats(stats *Stats) {
 	stats.Allocated += bkt.statAllocated.Load()
 }
 
-// Stats() acquires global stats of Cache.
-func (c *Cache) Stats() Stats {
-	var stats Stats
+// LoadStats() acquires global stats of Cache.
+func (c *Cache) LoadStats(stats *Stats) {
 	for i := range numBuckets {
-		c.buckets[i].loadStats(&stats)
+		c.buckets[i].loadStats(stats)
 	}
-	return stats
 }

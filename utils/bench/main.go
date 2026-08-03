@@ -51,7 +51,7 @@ func parseFlags() Config {
 
 	flag.DurationVarP(&cfg.Duration, "duration", "d", 10*time.Minute, "test run duration")
 	flag.IntVarP(&cfg.Concurrency, "concurrency", "c", 16, "number of worker goroutines")
-	flag.StringVarP(&cfg.CacheSize, "cache-size", "s", "32MiB", "total cache capacity (e.g. 64KB, 32MB, 1GB)")
+	flag.StringVarP(&cfg.CacheSize, "cache-size", "s", "32MiB", "total cache capacity (e.g. 64KiB, 32MiB, 1GiB)")
 	flag.IntVarP(&cfg.KeySpaceSize, "key-space", "k", 500_000, "number of distinct keys in the pool")
 	flag.IntVarP(&cfg.ValueSize, "value-size", "v", 1024, "byte size of values")
 	flag.DurationVarP(&cfg.SampleInterval, "sample-interval", "i", 5*time.Second, "metrics recording interval")
@@ -461,6 +461,7 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 		var lastOps uint64
 		var lastDels uint64
 		var prevStats kv.Stats
+		var prevPause time.Duration
 
 		for {
 			select {
@@ -483,8 +484,10 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 				elapsed := int(t.Sub(startTime).Seconds())
 
 				// Cache-level stats (deltas since last sample).
-				curStats := cache.Stats()
+				var curStats kv.Stats
+				cache.LoadStats(&curStats)
 				getsDelta := curStats.Gets - prevStats.Gets
+				pauseDelta := time.Duration(m.PauseTotalNs) - prevPause
 				setsDelta := curStats.Sets - prevStats.Sets
 				missesDelta := curStats.Misses - prevStats.Misses
 				collisionsDelta := curStats.Collisions - prevStats.Collisions
@@ -492,11 +495,12 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 				deallocsDelta := curStats.Deallocations - prevStats.Deallocations
 				allocsDelta := curStats.Allocations - prevStats.Allocations
 				prevStats = curStats
+				prevPause = time.Duration(m.PauseTotalNs)
 
 				// Console readout.
 				fmt.Printf("[%4ds] Ops/s: %8.0f | Heap: %s | Sys: %s | GC: %4d | Pause: %s | "+
-					"Gets: %8d | Sets: %8d | Miss: %8d | Coll: %8d | Vacuum: %8d | Dels: %8d | Dealloc: %6d | Alloc: %6d | Allocated: %s\n",
-					elapsed, opsPerSec, units.BytesSize(float64(m.HeapAlloc)), units.BytesSize(float64(m.Sys)), m.NumGC, time.Duration(m.PauseTotalNs).String(),
+					"Gets: %8d | Sets: %8d | Miss: %8d | Coll: %8d | Vacuums: %8d | Dels: %8d | Deallocs: %6d | Allocs: %6d | Allocated: %s\n",
+					elapsed, opsPerSec, units.BytesSize(float64(m.HeapAlloc)), units.BytesSize(float64(m.Sys)), m.NumGC, pauseDelta.String(),
 					getsDelta, setsDelta, missesDelta, collisionsDelta, vacuumsDelta,
 					delsDelta, deallocsDelta, allocsDelta, units.BytesSize(float64(curStats.Allocated)))
 				// Write CSV row.
@@ -535,7 +539,8 @@ func runBenchmark(cache *kv.Cache, cfg Config) {
 	elapsed := time.Since(startTime)
 	finalOps := atomic.LoadUint64(&totalOps)
 	finalDels := atomic.LoadUint64(&totalDels)
-	finalStats := cache.Stats()
+	var finalStats kv.Stats
+	cache.LoadStats(&finalStats)
 
 	fmt.Println()
 	fmt.Println("=== Final Summary ===")
