@@ -36,14 +36,14 @@ func New(size int) *Cache {
 // k and v are safe to be modified after Set() returns
 func (c *Cache) Set(k, v []byte) {
 	h := xxh3.Hash(k)
-	c.buckets[h%uint64(len(c.buckets))].set(k, v, h)
+	c.buckets[h%numBuckets].set(k, v, h)
 }
 
 // Get() appends value for key k to dst.
 // Returns nil if not found.
 func (c *Cache) Get(dst, k []byte) (res []byte) {
 	h := xxh3.Hash(k)
-	res, _ = c.buckets[h%uint64(len(c.buckets))].get(dst, k, h, true)
+	res, _ = c.buckets[h%numBuckets].get(dst, k, h, true)
 	return
 }
 
@@ -53,7 +53,7 @@ func (c *Cache) Get(dst, k []byte) (res []byte) {
 // HasGet() is equal to Get() in performance.
 func (c *Cache) HasGet(dst, k []byte) (res []byte, found bool) {
 	h := xxh3.Hash(k)
-	res, found = c.buckets[h%uint64(len(c.buckets))].get(dst, k, h, true)
+	res, found = c.buckets[h%numBuckets].get(dst, k, h, true)
 	return
 }
 
@@ -62,14 +62,14 @@ func (c *Cache) HasGet(dst, k []byte) (res []byte, found bool) {
 // Has() is slightly cheaper than HasGet() and Get().
 func (c *Cache) Has(k []byte) (found bool) {
 	h := xxh3.Hash(k)
-	_, found = c.buckets[h%uint64(len(c.buckets))].get(nil, k, h, false)
+	_, found = c.buckets[h%numBuckets].get(nil, k, h, false)
 	return
 }
 
 // Del() deletes KV pair from cache with key k.
 func (c *Cache) Del(k []byte) {
 	h := xxh3.Hash(k)
-	c.buckets[h%uint64(len(c.buckets))].del(h)
+	c.buckets[h%numBuckets].del(h)
 }
 
 // Reset removes all KV pairs from cache
